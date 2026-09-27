@@ -20,6 +20,10 @@ env/
 *.env
 config.env
 
+# Sensitive files
+recovery-codes.txt
+*.recovery-codes*
+
 # Database files (SQLite)
 *.db
 *.sqlite

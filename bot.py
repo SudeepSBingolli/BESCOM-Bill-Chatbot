@@ -917,22 +917,39 @@ async def handle_appliance_toggle(update: Update, context: ContextTypes.DEFAULT_
         return
 
     if data == "appliances_done":
-        if not selected:
-            selected.update(["led_bulb", "ceiling_fan", "fridge"])
-            context.user_data["selected_appliances"] = selected
+        # Handled by appliance_conv ConversationHandler entry_point.
+        # If we reach here it means the ConversationHandler wasn't registered yet —
+        # this branch acts as a safe fallback only.
+        return await handle_appliances_done_entry(update, context)
 
-        sel_names = [APPLIANCE_MAP[aid]["label"] for aid in selected if aid in APPLIANCE_MAP]
-        summary_text = (
-            "👍 Great!\n\n"
-            "You selected:\n"
-            + "\n".join(f"• {name}" for name in sel_names)
-            + "\n\nLet's get a few details."
-        )
-        await query.message.reply_text(summary_text)
 
-        context.user_data["appliance_queue"] = list(selected)
-        context.user_data["current_app_idx"] = 0
-        return await ask_appliance_quantity(query.message, context)
+async def handle_appliances_done_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Entry point for the appliance ConversationHandler — triggered when user taps Done.
+    This must be a CallbackQueryHandler entry so that the returned state is honoured."""
+    query = update.callback_query
+    await query.answer()
+
+    selected = context.user_data.get("selected_appliances", set())
+    if not selected:
+        selected.update(["led_bulb", "ceiling_fan", "fridge"])
+        context.user_data["selected_appliances"] = selected
+
+    # Reset per-session data
+    context.user_data["appliance_counts"] = {}
+    context.user_data["appliance_hours"] = {}
+
+    sel_names = [APPLIANCE_MAP[aid]["label"] for aid in selected if aid in APPLIANCE_MAP]
+    summary_text = (
+        "👍 Great!\n\n"
+        "You selected:\n"
+        + "\n".join(f"• {name}" for name in sel_names)
+        + "\n\nLet's get a few details."
+    )
+    await query.message.reply_text(summary_text)
+
+    context.user_data["appliance_queue"] = list(selected)
+    context.user_data["current_app_idx"] = 0
+    return await ask_appliance_quantity(query.message, context)
 
 
 async def ask_appliance_quantity(message, context: ContextTypes.DEFAULT_TYPE):
@@ -1633,9 +1650,6 @@ def main():
     # Photos
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
-    # Inline appliance callback
-    app.add_handler(CallbackQueryHandler(handle_appliance_toggle))
-
     # Conversation for Manual Readings (Current -> Previous)
     manual_conv = ConversationHandler(
         entry_points=[
@@ -1656,12 +1670,11 @@ def main():
     app.add_handler(manual_conv)
 
     # Conversation for appliance details (Quantity & Hours)
+    # IMPORTANT: Registered BEFORE the global CallbackQueryHandler so that
+    # the 'appliances_done' entry_point fires before the catch-all handler.
     appliance_conv = ConversationHandler(
         entry_points=[
-            MessageHandler(
-                filters.TEXT & filters.Regex(r"^(1|2|3|4|5\+|1–3 hours|4–6 hours|7–10 hours|10\+ hours)$"),
-                handle_appliance_qty_response,
-            )
+            CallbackQueryHandler(handle_appliances_done_entry, pattern="^appliances_done$"),
         ],
         states={
             APPLIANCE_QTY: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_appliance_qty_response)],
@@ -1675,6 +1688,9 @@ def main():
         ],
     )
     app.add_handler(appliance_conv)
+
+    # Inline appliance toggle / GJ callbacks (catch-all — must come AFTER appliance_conv)
+    app.add_handler(CallbackQueryHandler(handle_appliance_toggle))
 
     # General text dispatcher
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_dispatcher))
